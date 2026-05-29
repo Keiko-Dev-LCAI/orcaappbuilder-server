@@ -18,9 +18,10 @@ import os
 if os.path.exists('/home/keiko/pylibs'):
     sys.path.insert(0, '/home/keiko/pylibs')
 
+import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json, threading, time, secrets, base64, struct
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 PORT = int(os.environ.get('PORT', 8187))
 # Strip ALL whitespace (including middle spaces from Railway textarea wrapping) + quotes
@@ -781,6 +782,51 @@ def _DEAD_CODE_old_run_aivm():
 
 
 # ════════════════════════════════════════════════════════════════════════
+# THREADING HTTP SERVER + JOB STORE
+# ════════════════════════════════════════════════════════════════════════
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    """Handles each request in its own thread so AIVM jobs don't block polling."""
+    daemon_threads = True
+
+
+# In-memory job store: job_id -> {status, reply, error, created}
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+
+
+def _start_job(message: str, mode: str) -> str:
+    """Launch AIVM inference in background; return job_id immediately."""
+    job_id = secrets.token_hex(10)
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'pending', 'reply': None, 'error': None,
+                         'created': time.time()}
+    # Remove stale jobs (older than 15 minutes)
+    cutoff = time.time() - 900
+    with _jobs_lock:
+        stale = [k for k, v in _jobs.items() if v['created'] < cutoff]
+        for k in stale:
+            del _jobs[k]
+
+    def _worker():
+        try:
+            reply = run_aivm_inference(message, mode)
+            with _jobs_lock:
+                if job_id in _jobs:
+                    _jobs[job_id]['status'] = 'done'
+                    _jobs[job_id]['reply']  = reply
+        except Exception as e:
+            print(f'[JOB {job_id}] error: {e}')
+            with _jobs_lock:
+                if job_id in _jobs:
+                    _jobs[job_id]['status'] = 'error'
+                    _jobs[job_id]['error']  = str(e)[:300]
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return job_id
+
+
+# ════════════════════════════════════════════════════════════════════════
 # HTTP SERVER
 # ════════════════════════════════════════════════════════════════════════
 
@@ -806,14 +852,32 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path   = parsed.path
+
         if path == '/api/health':
             self.send_json(200, {
-                'status': 'ok',
+                'status':  'ok',
                 'service': 'orcaapp',
                 'version': '1.0.0',
-                'aivm': 'ready' if PRIVATE_KEY else 'no key'
+                'aivm':    'ready' if PRIVATE_KEY else 'no key',
+                'jobs':    len(_jobs),
             })
+
+        elif path == '/api/chat/status':
+            qs     = parse_qs(parsed.query)
+            job_id = (qs.get('job_id') or [''])[0].strip()
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+            if not job:
+                self.send_json(404, {'error': 'job not found'})
+                return
+            self.send_json(200, {
+                'status': job['status'],
+                'reply':  job.get('reply'),
+                'error':  job.get('error'),
+            })
+
         else:
             self.send_json(404, {'error': 'not found'})
 
@@ -830,7 +894,7 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
 
         if path == '/api/chat':
             message = (data.get('message') or data.get('prompt') or '').strip()
-            mode = (data.get('mode') or 'chat').strip().lower()
+            mode    = (data.get('mode') or 'chat').strip().lower()
 
             if not message:
                 self.send_json(400, {'error': 'message required'})
@@ -839,8 +903,11 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
                 self.send_json(503, {'error': 'AI not configured — LIGHTCHAIN_PRIVATE_KEY not set'})
                 return
 
-            reply = run_aivm_inference(message, mode)
-            self.send_json(200, {'reply': reply})
+            # Start AIVM in background; return job_id immediately
+            # (avoids Railway 60s HTTP timeout on long AIVM calls)
+            job_id = _start_job(message, mode)
+            print(f'[JOB {job_id}] started — mode={mode}, msg={message[:60]}')
+            self.send_json(202, {'job_id': job_id, 'status': 'pending'})
 
         else:
             self.send_json(404, {'error': 'not found'})
@@ -849,7 +916,7 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
 def main():
     if not PRIVATE_KEY:
         print('[WARN] LIGHTCHAIN_PRIVATE_KEY not set — AI endpoints will return 503')
-    server = HTTPServer(('0.0.0.0', PORT), OrcaAppHandler)
+    server = ThreadingHTTPServer(('0.0.0.0', PORT), OrcaAppHandler)
     print(f'[OrcaApp] Server running on port {PORT}')
     try:
         server.serve_forever()
