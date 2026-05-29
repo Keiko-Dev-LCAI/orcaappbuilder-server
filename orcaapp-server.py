@@ -386,8 +386,9 @@ class AIVMClient:
         prep = r.json()
 
         # 5. createSession on-chain
-        params_hash = bytes.fromhex(model_id.lstrip('0x').lstrip('0X').zfill(64))
-        sig_bytes   = bytes.fromhex(prep['signature'].lstrip('0x').lstrip('0X'))
+        def _h(s): return s[2:] if isinstance(s, str) and s[:2].lower() == '0x' else s
+        params_hash = bytes.fromhex(_h(model_id).zfill(64))
+        sig_bytes   = bytes.fromhex(_h(prep['signature']))
         gas_price   = self._w3.eth.gas_price
         nonce_val   = self._w3.eth.get_transaction_count(self._account.address)
         tx = self._registry.functions.createSession(
@@ -424,7 +425,7 @@ class AIVMClient:
 
         # 6. Get relay token
         relay_token = None
-        deadline = time.time() + 30
+        deadline = time.time() + 120
         while time.time() < deadline:
             r = req.get(
                 f'{AIVM_GATEWAY}/api/sessions/{session_id}/token',
@@ -489,7 +490,7 @@ class AIVMClient:
         blob_hashes = r.json().get('blobHashes', [])
         if not blob_hashes:
             raise RuntimeError('No blob hash returned from gateway')
-        prompt_hash = bytes.fromhex(blob_hashes[0].lstrip('0x').lstrip('0X').zfill(64))
+        prompt_hash = bytes.fromhex(_h(blob_hashes[0]).zfill(64))
 
         # 9. submitJob (pay 0.02 LCAI)
         nonce_val2 = self._w3.eth.get_transaction_count(self._account.address)
@@ -521,12 +522,17 @@ class AIVMClient:
             raise RuntimeError('JobSubmitted event not found in receipt')
 
         # 10. Poll for JobCompleted, collect relay data
-        job_completed_topic = Web3.keccak(text='JobCompleted(uint256,address,bytes32,bytes32)').hex()
+        job_completed_topic = '0x' + Web3.keccak(text='JobCompleted(uint256,address,bytes32,bytes32)').hex()
         job_id_topic = '0x' + hex(job_id)[2:].zfill(64)
         done     = False
         deadline = time.time() + timeout_secs
         while time.time() < deadline and not done:
             time.sleep(5)
+            # Return early if relay already delivered chunks
+            if chunks:
+                print(f'[AIVM] relay data arrived ({len(chunks)} chunks), returning early')
+                done = True
+                break
             try:
                 head = self._w3.eth.block_number
                 logs = self._w3.eth.get_logs({
@@ -537,17 +543,19 @@ class AIVMClient:
                 })
                 if logs:
                     done = True
+                    print(f'[AIVM] JobCompleted on-chain!')
             except Exception as e:
-                print(f'[AIVM] log poll error: {e}')
+                print(f'[AIVM] log poll error (retrying): {e}')
 
-        time.sleep(4)
+        time.sleep(4)  # grace period for final relay frames
         ws.close()
         result = ''.join(chunks)
         if result:
+            print(f'[AIVM] inference done, {len(result)} chars')
             return result
         if not done:
             raise RuntimeError(f'Timeout after {timeout_secs}s waiting for JobCompleted')
-        return result
+        return result or 'Sorry, the AI completed but returned no response. Please try again.'
 
 
 # Lazy singleton so key is only loaded once
