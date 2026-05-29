@@ -57,7 +57,7 @@ Lightchain AI is a blockchain (think of it as a shared public record-keeping sys
 - RPC URL (the address your app uses to talk to the blockchain): https://rpc.mainnet.lightchain.ai
 - Explorer (like a bank statement you can read — shows all transactions): https://mainnet.lightscan.app
 - LCAI is the currency. People pay LCAI to use apps. Apps pay LCAI to use AI.
-- Trust Wallet is the recommended wallet. There is NO official Lightchain wallet app.
+- Trust Wallet (iOS/Android) and MetaMask (desktop browser extension) both work with Lightchain. There is NO official Lightchain wallet app — anything claiming to be one is a scam.
 - Lightchain community is on Discord ONLY — there is no Telegram.
 - Discord: https://discord.gg/lightchain
 
