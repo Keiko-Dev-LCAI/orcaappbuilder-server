@@ -499,11 +499,11 @@ CORRECT ABI for createSession (6 parameters — older code uses 3, that is wrong
 
 Helper functions (copy these exactly):
   def _h(s):
-      """Safe hex prefix removal — use this instead of lstrip('0x')"""
+      # Safe hex prefix removal — use this instead of lstrip('0x')
       return s[2:] if isinstance(s, str) and s[:2].lower() == '0x' else s
 
   def decode_pubkey(s):
-      """Accept hex (with/without 0x) or base64; return 65-byte uncompressed P-256 point"""
+      # Accept hex (with/without 0x) or base64; return 65-byte uncompressed P-256 point
       if isinstance(s, (bytes, bytearray)): return bytes(s)
       s = s.strip()
       if s.startswith('0x') or s.startswith('0X'): b = bytes.fromhex(s[2:])
@@ -513,7 +513,7 @@ Helper functions (copy these exactly):
       return b
 
   def ecdh_wrap(session_key, peer_pub_bytes):
-      """ECDH-wrap session_key for peer P-256 (SECP256R1, NOT SECP256K1) pubkey"""
+      # ECDH-wrap session_key for peer P-256 (SECP256R1, NOT SECP256K1) pubkey
       from cryptography.hazmat.primitives.asymmetric.ec import (
           generate_private_key, ECDH, EllipticCurvePublicNumbers, SECP256R1)
       from cryptography.hazmat.primitives.ciphers.aead import AESGCM
