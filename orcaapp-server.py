@@ -267,9 +267,17 @@ def run_aivm_inference(user_message: str, mode: str = 'chat') -> str:
         )
         from cryptography.hazmat.primitives.serialization import load_der_public_key
 
-        # Build DER-encoded public key from raw bytes
-        SECP256K1_OID = bytes.fromhex('3056301006072a8648ce3d020106052b8104000a034200')
-        der_pub = SECP256K1_OID + worker_pub_bytes
+        # Build DER-encoded public key — handle both compressed (33 bytes) and uncompressed (65 bytes)
+        klen = len(worker_pub_bytes)
+        if klen == 65:
+            # Uncompressed: 04 + x(32) + y(32) → BIT STRING = 66 bytes
+            oid_header = bytes.fromhex('3056301006072a8648ce3d020106052b8104000a034200')
+        elif klen == 33:
+            # Compressed: 02/03 + x(32) → BIT STRING = 34 bytes
+            oid_header = bytes.fromhex('3036301006072a8648ce3d020106052b8104000a032200')
+        else:
+            raise ValueError(f'Unexpected worker public key length: {klen} bytes')
+        der_pub = oid_header + worker_pub_bytes
         wpk = load_der_public_key(der_pub, backend=default_backend())
         shared = eph_priv.exchange(ECDH(), wpk)
         aes_key = shared[:32]
