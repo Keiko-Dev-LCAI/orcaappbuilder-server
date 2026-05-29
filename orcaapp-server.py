@@ -23,7 +23,8 @@ import json, threading, time, secrets, base64, struct
 from urllib.parse import urlparse
 
 PORT = int(os.environ.get('PORT', 8187))
-PRIVATE_KEY = os.environ.get('LIGHTCHAIN_PRIVATE_KEY', '')
+# Strip whitespace/newlines that can sneak in from Railway textarea or env files
+PRIVATE_KEY = os.environ.get('LIGHTCHAIN_PRIVATE_KEY', '').strip().strip('"').strip("'")
 
 # ════════════════════════════════════════════════════════════════════════
 # MASTER SYSTEM PROMPT — written for non-technical users
