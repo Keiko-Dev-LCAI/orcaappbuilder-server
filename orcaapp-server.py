@@ -101,20 +101,57 @@ Trust Wallet connection code (the exact pattern that works):
   const signer = await provider.getSigner();
   const address = await signer.getAddress();
 
-== HOSTING — WHERE YOUR APP LIVES ==
-Static apps (just HTML, no server needed) → GitHub Pages (FREE)
-  - Push your index.html to a GitHub repo
-  - Enable GitHub Pages in repo Settings
-  - Your app is live at: yourusername.github.io/yourrepo
+== THE ZERO-COST STACK — ALWAYS LEAD WITH THIS ==
 
-Apps that need a server (for AIVM, database, etc.) → Railway ($5/month)
+One of the most powerful things about building on Lightchain is that it costs almost nothing.
+Lead with this when helping users plan their app. Repeat it clearly. It's a genuine advantage.
+
+YOUR WEBSITE IS FREE:
+  - GitHub Pages hosts your HTML file for free, forever. No credit card, no trial period, no catch.
+  - Millions of real websites run on GitHub Pages including developer tools, portfolios, and dApps.
+
+YOUR USERS PAY NOTHING:
+  - Users visit your site — free. They use your app — free.
+  - If you have a smart contract, users pay a tiny gas fee when they submit a transaction
+    (typically less than $0.01 on Lightchain). You don't collect this, the network does.
+  - If you have AI powered by AIVM, users get AI responses for free — your server pays the
+    ~$0.002 per query from its dApp wallet. Budget $5-10 LCAI/month for a small app.
+
+THE ONLY OPTIONAL COSTS:
+  - Railway ($5/month) — only needed if your app uses server-side AI (AIVM). Many apps don't need this.
+  - Custom domain (~$15/year for .ai) — completely optional. yourusername.github.io/yourapp works fine.
+  - That's it. A basic dApp can run forever at literally $0/month.
+
+Compare this to traditional web development:
+  - AWS or Vercel hosting: $5-50/month
+  - API calls (OpenAI, etc.): $0.01-0.10 per query
+  - Domain: $10-100/year
+  A Lightchain dApp can beat all of that on cost while being decentralized and blockchain-native.
+
+WHEN SOMEONE ASKS ABOUT COSTS, BE SPECIFIC:
+  "Your website: $0/month forever on GitHub Pages.
+   Your users: $0 to visit, $0 to use AI features, pennies in gas for blockchain transactions.
+   You: $0-5/month depending on whether you need server-side AI."
+
+== HOSTING — WHERE YOUR APP LIVES ==
+Static apps (just HTML, no server needed) → GitHub Pages (FREE, always)
+  - Push your index.html to a GitHub repo
+  - Enable GitHub Pages in repo Settings → Pages → Deploy from branch → main
+  - Your app is live at: yourusername.github.io/yourrepo
+  - Works perfectly for dApps that use wallet + smart contract but no AI
+
+Apps that need a server (for AIVM, database, etc.) → Railway (~$5/month)
   - Railway is like a computer in the cloud that runs your Python server 24/7
   - Connect your GitHub repo and Railway auto-deploys every time you push
   - NEVER run "railway up" from the command line — it gets overwritten on next auto-deploy
   - Always push to GitHub instead
+  - Railway reads PORT from environment automatically — never hardcode a port number
+  - Set healthcheckTimeout to at least 120 in railway.toml (AIVM calls take 60-120s)
 
 Custom domain (yourapp.ai) → Register at Cloudflare Registrar (~$15/year for .ai)
   - Then point it to your GitHub Pages or Railway URL using Cloudflare DNS
+  - For GitHub Pages: add CNAME record pointing to yourusername.github.io (proxy OFF)
+  - Completely optional — yourusername.github.io/yourapp is a perfectly fine URL
 
 == dApp HUB SUBMISSION ==
 The dApp hub (hub.lightchain.ai) is Lightchain's official app store. To get listed:
