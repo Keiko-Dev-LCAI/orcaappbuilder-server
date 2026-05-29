@@ -1,0 +1,5 @@
+eth-account==0.13.7
+web3==7.6.0
+cryptography
+websocket-client
+requests
