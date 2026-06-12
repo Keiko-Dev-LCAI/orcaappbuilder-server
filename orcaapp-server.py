@@ -639,7 +639,159 @@ IMPORTANT NOTES FOR BRAINSTORM MODE:
 - When suggesting DeFi/bridge apps, mention the Bridge SDK
 - When suggesting governance dashboards, mention the DAO SDK
 - When suggesting apps for Node.js or TypeScript builders specifically, lead with lightnode-sdk over the Python server-side pattern
-- The Python pattern (Railway + server.py) remains the best choice for beginners — lightnode-sdk is for developers who are already comfortable with Node.js"""
+- The Python pattern (Railway + server.py) remains the best choice for beginners — lightnode-sdk is for developers who are already comfortable with Node.js
+
+== LIGHTNODE SDK — MULTI-TURN CONVERSATION (Conversation Class) ==
+
+The Conversation class maintains a persistent AI session across multiple back-and-forth messages. The first message pays createSession (one blockchain TX). Every follow-up submits onto the same session — cheaper and faster. If the session expires, the SDK silently reopens it.
+
+PATTERN:
+  import { Conversation } from "lightnode-sdk";
+  const chat = new Conversation({
+    network: "mainnet",
+    privateKey: process.env.PRIVATE_KEY,
+    system: "You are a concise assistant.",
+  });
+  const a = await chat.send("What is LightChain AI?");
+  const b = await chat.send("And how do workers earn?");  // remembers context
+
+KEY BEHAVIORS:
+- One on-chain session per Conversation instance
+- Follow-up messages remember everything said earlier in the same session
+- SDK handles session expiry and re-opens transparently with one retry
+- Cheaper per-turn than creating a new session each time
+
+WHEN TO SUGGEST THIS PATTERN:
+- Apps where users have ongoing conversations (tutors, assistants, advisors)
+- Multi-step wizards where the AI needs to remember earlier answers
+- Support bots where context carries across the conversation
+- Any app where "stateful" AI chat matters — not just one-shot questions
+
+== LIGHTNODE SDK — AGENT CLASS (ReAct Tool Calling) ==
+
+The Agent class lets the AI use tools — custom functions you define — to reason through multi-step tasks. The model thinks, calls a tool, sees the result, thinks again, and repeats until it has an answer. This is "ReAct" style: Reason → Act → Observe → Reason.
+
+PATTERN:
+  import { Agent } from "lightnode-sdk";
+  const agent = new Agent({
+    network: "mainnet",
+    privateKey: process.env.PRIVATE_KEY,
+    maxIterations: 4,
+    tools: [
+      {
+        name: "getPrice",
+        description: "Fetch the current price of an LCAI token pair",
+        args: { pair: "string" },
+        handler: ({ pair }) => fetchLivePriceFromDex(pair),
+      },
+      {
+        name: "now",
+        description: "Current ISO timestamp",
+        args: {},
+        handler: () => new Date().toISOString(),
+      },
+    ],
+  });
+  const { answer, steps } = await agent.run("What is the current LCAI price and what time is it?");
+  // steps: array of {kind: "thought" | "tool_call" | "answer"}
+
+KEY BEHAVIORS:
+- Tools are plain JavaScript functions — they can call APIs, fetch prices, read databases, do math
+- The AI decides WHICH tools to call and WHEN based on the question
+- maxIterations caps how many thought/tool cycles happen before giving up
+- steps[] lets you show the user "thinking" progress if you want
+- Works on llama3-8b — no special model required
+
+TOOLS YOU CAN WIRE IN:
+- Fetch live token price from HikariSwap or a DEX
+- Look up wallet balance or transaction history
+- Call any public API (weather, crypto data, sports, news)
+- Run a calculation (fee estimator, APY calculator, risk scorer)
+- Read from your own database or Railway backend
+- Check if a smart contract address is known-good or flagged
+
+WHEN TO SUGGEST THIS PATTERN:
+- Apps where the AI needs live data to answer (price checker, portfolio tracker)
+- Apps with calculators or estimators the AI should use
+- Research assistants that need to look things up before answering
+- Agents that handle multi-step workflows autonomously
+- Any time the user says "I want the AI to DO something, not just talk"
+
+== LIGHTNODE SDK — READ-ONLY NETWORK DATA (No Key, No Cost) ==
+
+The LightNode class lets any app read live Lightchain network data — no wallet, no LCAI, completely free. Great for dashboards, leaderboards, stats pages, and network monitors.
+
+PATTERN:
+  import { LightNode } from "lightnode-sdk";
+  const ln = new LightNode("mainnet");
+
+KEY METHODS (all free, no key needed):
+  ln.getNetworkStats()            — totals: active workers, jobs completed, earnings, model count
+  ln.getWorkerStats(1000, 25)     — per-worker reliability over last 1000 jobs, top 25 ranked
+  ln.getWorkers(200)              — all registered workers: stake, status, earnings, models
+  ln.getWorkerJobs(address, 20)   — recent jobs for one worker, newest first
+  ln.getModels()                  — all whitelisted models: name, fee, max output
+  ln.getModelStats(1000)          — per-model: completion rate, p50/p95 latency, disputes
+  ln.getWorkerActions(address)    — claimable earnings, gas check, stuck jobs, prioritized to-do list
+  ln.getWorkerLiveness(address)   — stuck-job + slash-risk diagnostic
+  ln.getJobStatus(jobId)          — completed / stalled / disputed / refundable flag
+  ln.isRegistered(address)        — boolean: is this wallet a registered worker?
+  ln.getEarningsLcai(address)     — settled earnings in whole LCAI for any worker
+
+PRE-SPEND QUOTE (check before charging LCAI):
+  const q = await ln.preInferenceQuote("llama3-8b");
+  if (!q.routable) throw new Error(q.verdict);
+  // q.feeLcai, q.eligibleWorkers, q.completionRate, q.p95, q.refundWindowSec
+
+WHEN TO SUGGEST THIS PATTERN:
+- Network explorer or leaderboard (who are the top workers?)
+- Stats dashboard showing network health (jobs/day, success rates, latency)
+- "Before you spend" check — show user expected fee + success rate before submitting a job
+- Worker profile pages (like a public explorer for any wallet)
+- Any app that wants to DISPLAY Lightchain data without requiring a wallet connection
+
+== LIGHTNODE SDK — ERROR HANDLING ==
+
+All lightnode-sdk errors have a fundsSafe boolean and a retryable flag. Always wrap inference calls in error handling in production apps.
+
+PATTERN:
+  import { explainInferenceError, decodeWorkerError } from "lightnode-sdk";
+  try {
+    await runInferenceWithKey({ network, privateKey, prompt });
+  } catch (e) {
+    const x = explainInferenceError(e, { refundWindowSec });
+    // x.kind — what type of error
+    // x.fundsSafe — true = user's LCAI was NOT charged; false = may have been charged
+    // x.retryable — true = safe to try again automatically
+    // x.nextStep — plain English explanation of what to do
+    if (x.retryable) retry();
+    else showUserMessage(x.nextStep);
+  }
+
+ERROR TYPES:
+  StalledWorkerError      — worker timed out; fundsSafe if within refund window
+  OnChainRevertError      — blockchain rejected the TX; use decodeWorkerError() for details
+  GatewayAuthError        — wallet auth failed; check private key
+  RelayTokenTimeoutError  — relay connection timed out
+  InferenceAbortedError   — worker aborted mid-inference
+
+DECODE RAW REVERT:
+  decodeWorkerError("0x592f994b...").message   // human-readable revert reason
+
+WHEN TO APPLY:
+- All production apps that call AIVM via lightnode-sdk should have this error handling
+- Especially important when real LCAI is at stake — fundsSafe tells user if they need to worry
+- Use x.nextStep as the user-facing error message
+
+UPDATED NOTES FOR BRAINSTORM MODE:
+- For stateful AI chat (conversations that remember earlier turns): Conversation class
+- For AI that takes actions, calls APIs, fetches live data, or runs calculations: Agent class with tools
+- For dashboards, leaderboards, explorer pages, stats widgets: LightNode read-only methods
+- For network monitors or "health before you spend" UX: preInferenceQuote
+- For any production app: always include error handling with explainInferenceError
+- The Agent class is the most powerful pattern for apps where the AI needs to DO something, not just answer a question — suggest it whenever a builder wants live data, calculators, or autonomous task handling
+- Conversation class is the right choice whenever a user needs multi-turn AI that remembers context — tutors, advisors, assistants, support bots
+- Read-only network data requires NO wallet — great for public pages and anonymous users"""
 
 # ════════════════════════════════════════════════════════════════════════
 # AIVM CLIENT — matches OrcaFiles production implementation
