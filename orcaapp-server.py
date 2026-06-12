@@ -1179,15 +1179,29 @@ def _get_aivm_client():
         _aivm_client = AIVMClient(PRIVATE_KEY)
     return _aivm_client
 
-def run_aivm_inference(user_message: str, mode: str = 'chat') -> str:
-    """Run one inference through Lightchain AIVM. Returns plain text reply."""
+def run_aivm_inference(user_message: str, mode: str = 'chat', history: list = None) -> str:
+    """Run one inference through Lightchain AIVM. Returns plain text reply.
+
+    history: optional list of {"role": "user"|"assistant", "content": "..."} dicts
+             representing the prior conversation turns to include as context.
+    """
     try:
         mode_context = {
             'brainstorm': '\n[MODE: BRAINSTORM — help generate dApp ideas]',
             'build':      '\n[MODE: BUILD — help plan and build a specific dApp]',
             'troubleshoot': '\n[MODE: TROUBLESHOOT — diagnose and fix a problem]',
         }.get(mode, '')
-        full_prompt = f'{SYSTEM_PROMPT}{mode_context}\n\nUser: {user_message}'
+
+        # Build conversation history block if prior turns exist
+        history_block = ''
+        if history:
+            lines = []
+            for turn in history:
+                label = 'User' if turn.get('role') == 'user' else 'Assistant'
+                lines.append(f'{label}: {turn.get("content", "")}')
+            history_block = '\n\n[PRIOR CONVERSATION — for context only]\n' + '\n'.join(lines) + '\n[END PRIOR CONVERSATION]\n'
+
+        full_prompt = f'{SYSTEM_PROMPT}{mode_context}{history_block}\n\nUser: {user_message}'
         client = _get_aivm_client()
         reply  = client.run_inference(full_prompt)
         return reply if reply else 'I received your message but the response was empty. Please try again.'
@@ -1412,9 +1426,18 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
+# Conversation history store: session_id -> [{"role": "user"|"assistant", "content": "..."}]
+# Keeps the last 6 exchanges (12 messages) per session to give the AI context.
+_sessions: dict = {}
+_sessions_lock = threading.Lock()
 
-def _start_job(message: str, mode: str) -> str:
-    """Launch AIVM inference in background; return job_id immediately."""
+
+def _start_job(message: str, mode: str, session_id: str = None) -> str:
+    """Launch AIVM inference in background; return job_id immediately.
+
+    session_id: if provided, loads prior conversation turns as context and
+                appends the new exchange to the session history on completion.
+    """
     job_id = secrets.token_hex(10)
     with _jobs_lock:
         _jobs[job_id] = {'status': 'pending', 'reply': None, 'error': None,
@@ -1426,13 +1449,29 @@ def _start_job(message: str, mode: str) -> str:
         for k in stale:
             del _jobs[k]
 
+    # Snapshot history for this session (copy so background thread has stable data)
+    history = []
+    if session_id:
+        with _sessions_lock:
+            history = list(_sessions.get(session_id, []))
+
     def _worker():
         try:
-            reply = run_aivm_inference(message, mode)
+            reply = run_aivm_inference(message, mode, history)
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]['status'] = 'done'
                     _jobs[job_id]['reply']  = reply
+            # Store this exchange in session history
+            if session_id and reply:
+                with _sessions_lock:
+                    if session_id not in _sessions:
+                        _sessions[session_id] = []
+                    _sessions[session_id].append({'role': 'user',      'content': message})
+                    _sessions[session_id].append({'role': 'assistant', 'content': reply})
+                    # Cap at last 12 messages (6 back-and-forth exchanges)
+                    if len(_sessions[session_id]) > 12:
+                        _sessions[session_id] = _sessions[session_id][-12:]
         except Exception as e:
             print(f'[JOB {job_id}] error: {e}')
             with _jobs_lock:
@@ -1511,8 +1550,9 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/api/chat':
-            message = (data.get('message') or data.get('prompt') or '').strip()
-            mode    = (data.get('mode') or 'chat').strip().lower()
+            message    = (data.get('message') or data.get('prompt') or '').strip()
+            mode       = (data.get('mode') or 'chat').strip().lower()
+            session_id = (data.get('session_id') or '').strip() or None
 
             if not message:
                 self.send_json(400, {'error': 'message required'})
@@ -1523,8 +1563,8 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
 
             # Start AIVM in background; return job_id immediately
             # (avoids Railway 60s HTTP timeout on long AIVM calls)
-            job_id = _start_job(message, mode)
-            print(f'[JOB {job_id}] started — mode={mode}, msg={message[:60]}')
+            job_id = _start_job(message, mode, session_id)
+            print(f'[JOB {job_id}] started — mode={mode}, session={session_id}, msg={message[:60]}')
             self.send_json(202, {'job_id': job_id, 'status': 'pending'})
 
         else:
