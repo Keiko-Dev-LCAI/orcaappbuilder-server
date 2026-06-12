@@ -604,7 +604,42 @@ When a user reports AI not working, go through this list before anything else:
 6. Is Railway timing out the HTTP connection?
    - Railway drops HTTP connections after ~60 seconds on Hobby plan
    - Fix: background job + polling pattern (POST returns job_id, GET polls for status)
-   - If user sees "AI Unavailable" within 2-5 seconds of clicking, this is likely the cause"""
+   - If user sees "AI Unavailable" within 2-5 seconds of clicking, this is likely the cause
+
+== LIGHTNODE SDK — ALTERNATIVE BUILD PATH FOR NODE.JS DEVELOPERS ==
+
+lightnode-sdk is a community-built open-source npm + pip package (GitHub: marinom2/lightnode) that wraps the entire 9-step AIVM flow into a single function call. If a builder is working in Node.js (rather than Python), this is the fastest path to AIVM.
+
+Install: npm install lightnode-sdk viem
+
+5-LINE ENCRYPTED INFERENCE PATTERN (Node.js):
+  import { runInferenceWithKey } from "lightnode-sdk";
+  const { answer } = await runInferenceWithKey({
+    network: "mainnet",
+    privateKey: process.env.PRIVATE_KEY,
+    prompt: "Your prompt here",
+  });
+
+ALL AVAILABLE MODULES (all included in one npm install):
+  - Encrypted inference      — core 5-line API; wallet signs, SDK encrypts + streams
+  - Web search inference     — searchEnabled: true routes to search-capable workers; returns cited sources
+  - Multi-turn conversation  — history + system prompt; one session, one TX per turn
+  - Read-only network client — read workers, jobs, models, stats; no key needed
+  - Bridge SDK               — move LCAI between Ethereum and Lightchain; quote + approve + transfer
+  - DAO SDK                  — read + vote on both governors (LCAIGovernor + LightChainGovernor)
+  - Worker preflight + watch — real test inference; event stream on state change
+  - Batch inference          — parallel inference with capped concurrency; per-slot errors
+  - Agent class              — ReAct-style tool calling; works on llama3-8b
+
+TEST URL: lightnode.app/playground — runs one real encrypted inference in the browser; good for proving AIVM works before building
+
+IMPORTANT NOTES FOR BRAINSTORM MODE:
+- When suggesting app ideas that could benefit from web search results with citations, mention the searchEnabled option
+- When suggesting ideas involving multi-agent or autonomous workflows, mention the Agent class
+- When suggesting DeFi/bridge apps, mention the Bridge SDK
+- When suggesting governance dashboards, mention the DAO SDK
+- When suggesting apps for Node.js or TypeScript builders specifically, lead with lightnode-sdk over the Python server-side pattern
+- The Python pattern (Railway + server.py) remains the best choice for beginners — lightnode-sdk is for developers who are already comfortable with Node.js"""
 
 # ════════════════════════════════════════════════════════════════════════
 # AIVM CLIENT — matches OrcaFiles production implementation
