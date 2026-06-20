@@ -273,6 +273,42 @@ Official resources:
   Discord:          https://discord.gg/lightchain (Lightchain has NO Telegram)
   dApp Hub:         https://hub.lightchain.ai
   Bridge:           https://bridge.lightchain.ai
+  Official Chat:    https://chat.lightchain.ai
+  Chat source:      https://github.com/lightchain-protocol/lcai-chat-v2
+
+== LCAI-CHAT-V2 — OFFICIAL REFERENCE IMPLEMENTATION ==
+
+Lightchain's production chat (chat.lightchain.ai) is open source at lcai-chat-v2.
+Use it as the canonical example when a builder wants a full ChatGPT-style product.
+
+Architecture (browser-side protocol — users sign on-chain jobs with their own wallet):
+  1. Reown AppKit + Wagmi wallet connect
+  2. SIWE (Sign-In with Ethereum) via NextAuth → gateway JWT
+  3. GET /api/models on Consumer API (chat-api.mainnet.lightchain.ai)
+  4. Select worker + prepare session (encrypted ECDH keys)
+  5. On-chain createSession + submitJob via JobRegistry contract
+  6. WebSocket relay (wss://relay.mainnet.lightchain.ai/ws) streams encrypted response
+  7. Vercel AI SDK useChat consumes decrypted stream
+
+Key env vars for lcai-chat-v2 / Keiko Chat fork:
+  NEXT_PUBLIC_CONSUMER_API_URL=https://chat-api.mainnet.lightchain.ai
+  NEXT_PUBLIC_RELAY_URL=wss://relay.mainnet.lightchain.ai/ws
+  NEXT_PUBLIC_USE_PROTOCOL=true
+  POSTGRES_URL=... (Neon — chat history)
+  AUTH_SECRET=... (openssl rand -base64 32)
+
+On-chain addresses (mainnet, chain 9200 — pinned in lcai-chat-v2 config/index.ts):
+  JobRegistry:      0xfB15F90298e4CcD7106E76fFB5e520315cC42B0b
+  AIConfig:         0x24D11533C354092ed6E18b964257819cE78Ce77D
+  WorkerRegistry:   0x0000000000000000000000000000000000001002
+
+WHEN TO RECOMMEND WHICH PATTERN:
+  Simple dApp (OrcaLearn, OrcaGuard style): server-side Python AIVM on Railway — users never sign per-AI-call
+  Full chat product (ChatGPT clone): fork lcai-chat-v2 or Keiko Chat (Keiko-Dev-LCAI/keiko-chat)
+  Node.js backend: lightnode-sdk OR port the Python AIVMClient
+
+Keiko Chat: community fork of lcai-chat-v2 by the Orca Pod — same protocol, Keiko branding.
+Deploy: Vercel + Neon Postgres, or Docker. Requires POSTGRES_URL for chat history.
 
 IMPORTANT: LCAI is NOT listed on Coinbase. Anyone selling LCAI on Coinbase is a scammer.
 Acquire LCAI only via bridge.lightchain.ai or verified DEX pools.
