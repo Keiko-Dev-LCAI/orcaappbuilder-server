@@ -20,7 +20,7 @@ if os.path.exists('/home/keiko/pylibs'):
 
 import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json, threading, time, secrets, base64, struct
+import json, threading, time, secrets, base64, struct, queue
 from urllib.parse import urlparse, parse_qs
 
 PORT = int(os.environ.get('PORT', 8187))
@@ -1484,6 +1484,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 # In-memory job store: job_id -> {status, reply, error, created}
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
+_aivm_work_queue: queue.Queue = queue.Queue()
 
 # Conversation history store: session_id -> [{"role": "user"|"assistant", "content": "..."}]
 # Keeps the last 6 exchanges (12 messages) per session to give the AI context.
@@ -1491,44 +1492,23 @@ _sessions: dict = {}
 _sessions_lock = threading.Lock()
 
 
-def _start_job(message: str, mode: str, session_id: str = None) -> str:
-    """Launch AIVM inference in background; return job_id immediately.
-
-    session_id: if provided, loads prior conversation turns as context and
-                appends the new exchange to the session history on completion.
-    """
-    job_id = secrets.token_hex(10)
-    with _jobs_lock:
-        _jobs[job_id] = {'status': 'pending', 'reply': None, 'error': None,
-                         'created': time.time()}
-    # Remove stale jobs (older than 15 minutes)
-    cutoff = time.time() - 900
-    with _jobs_lock:
-        stale = [k for k, v in _jobs.items() if v['created'] < cutoff]
-        for k in stale:
-            del _jobs[k]
-
-    # Snapshot history for this session (copy so background thread has stable data)
-    history = []
-    if session_id:
-        with _sessions_lock:
-            history = list(_sessions.get(session_id, []))
-
-    def _worker():
+def _aivm_worker_loop():
+    """One AIVM payment at a time — testers queue instead of colliding on-chain."""
+    while True:
+        job_id, message, mode, history, session_id = _aivm_work_queue.get()
         try:
+            print(f'[JOB {job_id}] dequeued (waiting={_aivm_work_queue.qsize()})')
             reply = run_aivm_inference(message, mode, history)
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]['status'] = 'done'
-                    _jobs[job_id]['reply']  = reply
-            # Store this exchange in session history
+                    _jobs[job_id]['reply'] = reply
             if session_id and reply:
                 with _sessions_lock:
                     if session_id not in _sessions:
                         _sessions[session_id] = []
-                    _sessions[session_id].append({'role': 'user',      'content': message})
+                    _sessions[session_id].append({'role': 'user', 'content': message})
                     _sessions[session_id].append({'role': 'assistant', 'content': reply})
-                    # Cap at last 12 messages (6 back-and-forth exchanges)
                     if len(_sessions[session_id]) > 12:
                         _sessions[session_id] = _sessions[session_id][-12:]
         except Exception as e:
@@ -1536,9 +1516,37 @@ def _start_job(message: str, mode: str, session_id: str = None) -> str:
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]['status'] = 'error'
-                    _jobs[job_id]['error']  = str(e)[:300]
+                    _jobs[job_id]['error'] = str(e)[:300]
+        finally:
+            _aivm_work_queue.task_done()
 
-    threading.Thread(target=_worker, daemon=True).start()
+
+threading.Thread(target=_aivm_worker_loop, daemon=True).start()
+
+
+def _start_job(message: str, mode: str, session_id: str = None) -> str:
+    """Queue AIVM inference; return job_id immediately."""
+    job_id = secrets.token_hex(10)
+    with _jobs_lock:
+        _jobs[job_id] = {
+            'status': 'pending',
+            'reply': None,
+            'error': None,
+            'created': time.time(),
+            'queue': _aivm_work_queue.qsize() + 1,
+        }
+        cutoff = time.time() - 900
+        stale = [k for k, v in _jobs.items() if v['created'] < cutoff]
+        for k in stale:
+            del _jobs[k]
+
+    history = []
+    if session_id:
+        with _sessions_lock:
+            history = list(_sessions.get(session_id, []))
+
+    _aivm_work_queue.put((job_id, message, mode, history, session_id))
+    print(f'[JOB {job_id}] queued (depth={_aivm_work_queue.qsize()})')
     return job_id
 
 
