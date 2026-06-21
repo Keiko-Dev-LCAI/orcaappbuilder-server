@@ -844,12 +844,12 @@ AIVM_ABI = [
     {
         "name": "createSession", "type": "function", "stateMutability": "payable",
         "inputs": [
-            {"name": "paramsHash",      "type": "bytes32"},
-            {"name": "worker",          "type": "address"},
-            {"name": "encWorkerKey",    "type": "bytes"},
-            {"name": "ephemeralPubKey", "type": "bytes"},
-            {"name": "initState",       "type": "bytes"},
-            {"name": "expiry",          "type": "uint256"},
+            {"name": "modelId",               "type": "bytes32"},
+            {"name": "worker",                "type": "address"},
+            {"name": "encWorkerKey",          "type": "bytes"},
+            {"name": "encDisputerKey",        "type": "bytes"},
+            {"name": "dispatcherSignature",   "type": "bytes"},
+            {"name": "expiry",                "type": "uint256"},
         ],
         "outputs": [{"name": "sessionId", "type": "uint256"}],
     },
@@ -943,6 +943,8 @@ def _aivm_aes_decrypt(key: bytes, blob: bytes) -> bytes:
 
 
 class AIVMClient:
+    _tx_lock = threading.Lock()
+
     def __init__(self, private_key: str):
         import requests as _req
         from web3 import Web3
@@ -957,6 +959,23 @@ class AIVMClient:
         self._jwt     = None
         self._jwt_exp = 0
         print(f'[AIVM] wallet: {self._account.address}')
+
+    def _pending_nonce(self):
+        return self._w3.eth.get_transaction_count(self._account.address, 'pending')
+
+    def _send_raw_with_retry(self, signed_tx):
+        last_err = None
+        for attempt in range(4):
+            try:
+                return self._w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            except Exception as e:
+                last_err = e
+                err = str(e).lower()
+                if 'replacement transaction underpriced' in err or 'underpriced' in err:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise
+        raise last_err
 
     def _get_jwt(self) -> str:
         from eth_account.messages import encode_defunct
@@ -989,6 +1008,10 @@ class AIVMClient:
         }
 
     def run_inference(self, prompt: str, timeout_secs: int = 120) -> str:
+        with self._tx_lock:
+            return self._run_inference_locked(prompt, timeout_secs)
+
+    def _run_inference_locked(self, prompt: str, timeout_secs: int = 120) -> str:
         import websocket as _ws
         from web3 import Web3
         from urllib.parse import quote as url_quote
@@ -1035,8 +1058,8 @@ class AIVMClient:
         def _h(s): return s[2:] if isinstance(s, str) and s[:2].lower() == '0x' else s
         params_hash = bytes.fromhex(_h(model_id).zfill(64))
         sig_bytes   = bytes.fromhex(_h(prep['signature']))
-        gas_price   = self._w3.eth.gas_price
-        nonce_val   = self._w3.eth.get_transaction_count(self._account.address)
+        gas_price   = int(self._w3.eth.gas_price * 1.1)
+        nonce_val   = self._pending_nonce()
         tx = self._registry.functions.createSession(
             params_hash,
             Web3.to_checksum_address(prep['worker']),
@@ -1053,7 +1076,7 @@ class AIVMClient:
             'chainId':  AIVM_CHAIN_ID,
         })
         signed   = self._account.sign_transaction(tx)
-        tx_hash  = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash  = self._send_raw_with_retry(signed)
         receipt1 = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=90)
         if receipt1.status != 1:
             raise RuntimeError('createSession reverted on-chain')
@@ -1139,19 +1162,19 @@ class AIVMClient:
         prompt_hash = bytes.fromhex(_h(blob_hashes[0]).zfill(64))
 
         # 9. submitJob (pay 0.02 LCAI)
-        nonce_val2 = self._w3.eth.get_transaction_count(self._account.address)
+        nonce_val2 = self._pending_nonce()
         tx2 = self._registry.functions.submitJob(
             session_id, prompt_hash,
         ).build_transaction({
             'from':     self._account.address,
             'nonce':    nonce_val2,
             'gas':      500_000,
-            'gasPrice': gas_price,
+            'gasPrice': int(self._w3.eth.gas_price * 1.1),
             'value':    AIVM_JOB_FEE,
             'chainId':  AIVM_CHAIN_ID,
         })
         signed2  = self._account.sign_transaction(tx2)
-        tx_hash2 = self._w3.eth.send_raw_transaction(signed2.raw_transaction)
+        tx_hash2 = self._send_raw_with_retry(signed2)
         receipt2 = self._w3.eth.wait_for_transaction_receipt(tx_hash2, timeout=90)
         if receipt2.status != 1:
             raise RuntimeError('submitJob reverted — check LCAI balance')
@@ -1243,8 +1266,8 @@ def run_aivm_inference(user_message: str, mode: str = 'chat', history: list = No
         return reply if reply else 'I received your message but the response was empty. Please try again.'
     except Exception as e:
         print(f'[AIVM ERROR] {e}')
-        return (f'The AI is temporarily unavailable (network or AIVM issue). '
-                f'Please try again in a moment. Error: {str(e)[:200]}')
+        return ('The AI is temporarily unavailable (network or AIVM issue). '
+                'Please try again in a moment.')
 
 
 def _DEAD_CODE_old_run_aivm():
