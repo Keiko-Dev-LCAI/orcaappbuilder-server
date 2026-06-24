@@ -242,8 +242,8 @@ REQUIRED OUTPUT FORMAT (use these exact section headers):
 ## The bottom line
 One sentence verdict: NOT READY / READY WITH WARNINGS / READY TO ANNOUNCE. Then 2-3 sentences a 12-year-old could understand — what works, what doesn't, and why strangers can't use it yet.
 
-## What you can say in Discord right now
-One honest sentence they can copy-paste today. If NOT READY, give a "still working on it" line — NOT a "it's complete" line.
+## What you can tell people right now
+One honest sentence they can share publicly (hub listing, friend, beta tester). If NOT READY, give a "still working on it" line — NOT a "it's live for everyone" line. Never mention Discord unless the user brought it up.
 
 ## Your fix plan — do these in order
 Walk through EVERY fix plan step the scan returned. For each step:
@@ -257,7 +257,7 @@ If localhost was found: emphasize they need TWO things online — (1) website on
 If LCAI payments were detected AND localhost/issues found: WARN clearly — users could pay real LCAI and get nothing. Tell them to fix the server BEFORE announcing.
 
 ## After you fix it
-Tell them to come back to OrcaAppBuilder → Launch Check → paste the same URL → Run again. Pass = ready to announce.
+Tell them to come back to OrcaAppBuilder → Launch Check → paste the same URL → Run again. Pass = ready to list on the hub or share the link publicly.
 
 RULES:
 - No jargon without a plain-English translation in parentheses
@@ -1652,7 +1652,7 @@ _LAUNCH_FIX_PLAYBOOKS = {
              'do': 'If Vercel: push to GitHub (GitHub Desktop → Commit → Push) and Vercel auto-updates in ~1 min. If GitHub Pages: same push workflow. Or click Redeploy in the Vercel dashboard.',
              'check': 'Your live URL shows a new deploy timestamp or you pushed in the last few minutes.'},
             {'num': 7, 'title': 'Test the RIGHT way (important!)',
-             'do': 'Do NOT test on the same PC where your local server runs. Use your phone on cellular data (turn WiFi OFF) or ask a friend in Discord to click your link. Try the full flow: lyrics/AI → pay → download.',
+             'do': 'Do NOT test on the same PC where your local server runs. Use your phone on cellular data (turn WiFi OFF) or send the link to a friend. Try the full flow: lyrics/AI → pay → download.',
              'check': 'Someone who is NOT you can complete the full flow without errors.'},
             {'num': 8, 'title': 'Run Launch Check again',
              'do': 'Come back here → paste the same live URL → Run Launch Check. Critical issues should be gone.',
@@ -1684,7 +1684,7 @@ _LAUNCH_FIX_PLAYBOOKS = {
         'id': 'payment_safety',
         'emoji': '💸',
         'title': 'Protect paying users',
-        'why': 'Your app charges LCAI. If the server/AI part is broken, users could pay and get nothing — that creates angry Discord messages.',
+        'why': 'Your app charges LCAI. If the server/AI part is broken, users could pay and get nothing.',
         'steps': [
             {'num': 1, 'title': 'Fix the server first', 'do': 'Complete the "brain on the internet" steps above BEFORE telling anyone to pay.', 'check': 'AI/music/features work from a friend\'s phone without your PC running.'},
             {'num': 2, 'title': 'Test a real payment on testnet or small amount', 'do': 'Do one full pay → receive flow yourself from a phone, not your dev PC.', 'check': 'Payment completes AND the user gets the song/feature/download.'},
@@ -1697,7 +1697,7 @@ _LAUNCH_FIX_PLAYBOOKS = {
         'why': 'Testing on your own PC while your local server runs gives a false "it works!" result.',
         'steps': [
             {'num': 1, 'title': 'Phone on cellular', 'do': 'Turn OFF WiFi on your phone → open your live URL → try the full app.', 'check': 'Works without your PC turned on or server running locally.'},
-            {'num': 2, 'title': 'Or ask a friend', 'do': 'Send the link in Discord DM — ask "does the AI/music work for you?"', 'check': 'They confirm yes before you announce publicly.'},
+            {'num': 2, 'title': 'Or ask a friend', 'do': 'Send them the link directly — ask "does the AI/music work for you?"', 'check': 'They confirm yes before you share it publicly.'},
         ],
     },
     'use_https_url': {
@@ -1847,16 +1847,14 @@ def _plain_summary(findings: list, url: str, verdict_hint: str, app_profile: dic
     has_payment = any(f.get('fix_id') == 'payment_safety' for f in findings)
     if has_localhost:
         base = (
-            f'We scanned {url or "this app"} ({detected}). The page loads online, but the features '
-            '(AI, music, data) still try to connect to someone\'s home computer — not the internet. '
-            'It probably only works for the person who built it, while their PC is running the server.'
+            f'The site loads, but AI/features still call the builder\'s home computer — not the internet. '
+            f'Only works while their PC runs the server.'
         )
         if has_payment:
-            base += ' Warning: this app takes LCAI payments — users could pay and still get nothing until the server is fixed.'
-        base += ' You do not need OrcaAppBuilder to fix this — follow the steps below.'
+            base += ' Users could pay LCAI and get nothing until fixed.'
         return base
     if verdict_hint == 'NOT READY':
-        return 'We found problems that will break the app for other people. Follow the fix plan below before posting in Discord.'
+        return 'Problems found that will break this app for other people. Follow the fix steps below before going live.'
     if verdict_hint == 'READY WITH WARNINGS':
         return 'Your app may work for others, but polish the warnings below before a big announcement.'
     return 'No major blockers found in the automatic scan — still test from a friend\'s phone, then run Launch Check again.'
