@@ -233,7 +233,9 @@ When mode is TROUBLESHOOT: Diagnose their problem. Ask clarifying questions if n
 
 When mode is LAUNCHCHECK: You are a patient coach walking a NON-TECHNICAL beginner through fixes. They are NOT a programmer. Never assume they know what frontend, backend, API, deploy, or environment variables mean without explaining in one plain sentence first.
 
-You will receive AUTOMATED SCAN RESULTS and a FIX PLAN — treat scan findings as ground truth. Your job is to PERSONALIZE the fix plan for their specific app URL and notes.
+IMPORTANT: Launch Check is FREE and works on ANY public app URL — the user does NOT need to have built the app with OrcaAppBuilder. They may be checking their own app, a friend's app, or a random hub listing. Never say "go back to OrcaAppBuilder to rebuild" — only help them FIX the live app they pasted.
+
+You will receive AUTOMATED SCAN RESULTS, APP PROFILE (what we detected), and a FIX PLAN — treat scan findings as ground truth. Your job is to PERSONALIZE the fix plan for their specific app URL and notes.
 
 REQUIRED OUTPUT FORMAT (use these exact section headers):
 
@@ -1778,6 +1780,47 @@ def scan_text_for_launch_issues(text: str, source: str) -> list:
     return findings
 
 
+def _detect_app_profile(all_text: str, url: str = '') -> dict:
+    """Guess what kind of app this is — works on any public URL, not just OrcaAppBuilder apps."""
+    t = (all_text or '').lower()
+    u = (url or '').lower()
+    profile = {
+        'is_lightchain': bool(_re.search(
+            r'lightchain|lcai|0x23f0|chainid["\']?\s*[:=]\s*9200|9200|lightscan|mainnet\.lightchain',
+            t, _re.I)),
+        'has_wallet': bool(_re.search(r'eth_requestaccounts|window\.ethereum|wagmi|walletconnect', t, _re.I)),
+        'has_lcai_payments': bool(_re.search(r'parseether|sendtransaction|lcai', t, _re.I)),
+        'has_aivm_or_ai_api': bool(_re.search(r'/api/lyrics|/api/music|/api/chat|aivm|openai|generat', t, _re.I)),
+        'hosting': (
+            'vercel' if 'vercel.app' in u else
+            'github_pages' if 'github.io' in u else
+            'custom' if url else 'unknown'
+        ),
+        'stack_hint': (
+            'react' if 'react app' in t or 'webpackchunk' in t or 'create-react-app' in t else
+            'vite' if '/assets/index-' in t and 'vite' in t else
+            'html' if '<html' in t and 'react' not in t else
+            'unknown'
+        ),
+    }
+    tags = []
+    if profile['is_lightchain']:
+        tags.append('Lightchain dApp')
+    if profile['has_wallet']:
+        tags.append('wallet connect')
+    if profile['has_lcai_payments']:
+        tags.append('LCAI payments')
+    if profile['has_aivm_or_ai_api']:
+        tags.append('AI/features API')
+    if profile['hosting'] == 'vercel':
+        tags.append('hosted on Vercel')
+    elif profile['hosting'] == 'github_pages':
+        tags.append('hosted on GitHub Pages')
+    profile['detected_summary'] = ', '.join(tags) if tags else 'web app (generic)'
+    profile['orcaappbuilder_required'] = False
+    return profile
+
+
 def _build_fix_plan(findings: list, url: str = '') -> list:
     """Ordered beginner fix playbooks based on what the scan found."""
     needed = set()
@@ -1794,22 +1837,23 @@ def _build_fix_plan(findings: list, url: str = '') -> list:
     return plan
 
 
-def _plain_summary(findings: list, url: str, verdict_hint: str) -> str:
+def _plain_summary(findings: list, url: str, verdict_hint: str, app_profile: dict = None) -> str:
     """One-paragraph explanation for non-technical builders."""
+    app_profile = app_profile or {}
+    detected = app_profile.get('detected_summary', 'this app')
     has_localhost = any(
         f.get('fix_id') == 'localhost_backend' for f in findings if f.get('severity') == 'critical'
     )
     has_payment = any(f.get('fix_id') == 'payment_safety' for f in findings)
     if has_localhost:
         base = (
-            'Your website link works — people can open the page — but the features (AI, music, data) '
-            'still try to connect to your own computer, not the internet. '
-            'Only you can use it while your PC is running the server.'
+            f'We scanned {url or "this app"} ({detected}). The page loads online, but the features '
+            '(AI, music, data) still try to connect to someone\'s home computer — not the internet. '
+            'It probably only works for the person who built it, while their PC is running the server.'
         )
         if has_payment:
-            base += ' Worse: users could pay LCAI and still get nothing. Fix the server before announcing.'
-        if url:
-            base += f' Follow the step-by-step fix plan below for {url}.'
+            base += ' Warning: this app takes LCAI payments — users could pay and still get nothing until the server is fixed.'
+        base += ' You do not need OrcaAppBuilder to fix this — follow the steps below.'
         return base
     if verdict_hint == 'NOT READY':
         return 'We found problems that will break the app for other people. Follow the fix plan below before posting in Discord.'
@@ -1844,11 +1888,14 @@ def scan_live_url(url: str) -> dict:
             else:
                 js_urls.append(f'{base}/{src}')
 
+        combined_text = html
+
         # Prefer main.*.js bundles (Create React App / Vite)
         js_urls.sort(key=lambda u: (0 if 'main.' in u else 1, u))
         for js_url in js_urls[:4]:
             try:
                 js = _http_get_text(js_url, max_bytes=4_000_000)
+                combined_text += '\n' + js
                 sources.append({'type': 'javascript', 'url': js_url, 'bytes': len(js)})
                 all_findings.extend(scan_text_for_launch_issues(js, f'JS bundle ({js_url})'))
             except Exception as e:
@@ -1859,6 +1906,7 @@ def scan_live_url(url: str) -> dict:
             'url': url,
             'findings': all_findings,
             'sources': sources,
+            'combined_text': combined_text,
             'critical_count': sum(1 for f in all_findings if f['severity'] == 'critical'),
             'warning_count': sum(1 for f in all_findings if f['severity'] == 'warning'),
         }
@@ -1867,9 +1915,10 @@ def scan_live_url(url: str) -> dict:
 
 
 def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
-    """Combine URL fetch scan + pasted code scan."""
+    """Combine URL fetch scan + pasted code scan. Works on ANY public app URL."""
     findings = []
     sources_scanned = []
+    combined_text = ''
 
     url = (url or '').strip()
     code = (code or '').strip()
@@ -1879,6 +1928,7 @@ def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
         url_result = scan_live_url(url)
         findings.extend(url_result.get('findings') or [])
         sources_scanned.extend(url_result.get('sources') or [])
+        combined_text += url_result.get('combined_text') or ''
         if not url_result.get('ok'):
             findings.append({
                 'severity': 'warning',
@@ -1890,6 +1940,7 @@ def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
     if code:
         sources_scanned.append({'type': 'pasted_code', 'bytes': len(code)})
         findings.extend(scan_text_for_launch_issues(code, 'Pasted code'))
+        combined_text += '\n' + code
 
     if not url and not code:
         return {'ok': False, 'error': 'Enter your live URL and/or paste code to scan.'}
@@ -1909,11 +1960,13 @@ def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
 
     verdict_hint = 'NOT READY' if critical else ('READY WITH WARNINGS' if warnings else 'LIKELY OK — VERIFY MANUALLY')
     fix_plan = _build_fix_plan(findings, url)
+    app_profile = _detect_app_profile(combined_text, url)
 
     return {
         'ok': True,
         'verdict_hint': verdict_hint,
-        'plain_summary': _plain_summary(findings, url, verdict_hint),
+        'plain_summary': _plain_summary(findings, url, verdict_hint, app_profile),
+        'app_profile': app_profile,
         'critical_count': len(critical),
         'warning_count': len(warnings),
         'findings': findings,
@@ -1921,6 +1974,7 @@ def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
         'sources_scanned': sources_scanned,
         'notes': notes,
         'url': url,
+        'any_app_ok': True,
     }
 
 
