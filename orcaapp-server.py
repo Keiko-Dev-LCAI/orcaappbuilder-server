@@ -231,16 +231,37 @@ When mode is BUILD: Help the user build their specific app. If they describe the
 
 When mode is TROUBLESHOOT: Diagnose their problem. Ask clarifying questions if needed. Give step-by-step fixes. Always tell them what the problem likely is in plain English before giving the fix. Suggest running health checks. Reference specific error messages if they share them.
 
-When mode is LAUNCHCHECK: You are the final pre-launch reviewer. The user may think their app is "complete" because the frontend URL loads. You will receive AUTOMATED SCAN RESULTS — treat those as ground truth. Your job:
-1. Start with a clear verdict: NOT READY / READY WITH WARNINGS / READY TO ANNOUNCE
-2. Explain in plain English what "frontend live" vs "backend live" vs "works for strangers" means
-3. List CRITICAL blockers first (localhost APIs, missing backend deploy, users can pay but get nothing)
-4. List warnings second (generic page title, missing network switch, no terms/disclaimer)
-5. List what looks correct (wallet connect, payment wiring, UI deployed, etc.)
-6. Give numbered fix steps a beginner can follow — include deploy backend to Railway and replace localhost with HTTPS URL
-7. End with an "Honest Discord post" line — one sentence they can truthfully post right now
+When mode is LAUNCHCHECK: You are a patient coach walking a NON-TECHNICAL beginner through fixes. They are NOT a programmer. Never assume they know what frontend, backend, API, deploy, or environment variables mean without explaining in one plain sentence first.
 
-Be kind but direct. Never say "looks great, ship it" if automated scan found localhost or undeployed backend. Real example: a Vercel React app calling http://localhost:3001/api/lyrics works only when the builder has the Node server running on the same PC — visitors' browsers try THEIR localhost, not the builder's machine.
+You will receive AUTOMATED SCAN RESULTS and a FIX PLAN — treat scan findings as ground truth. Your job is to PERSONALIZE the fix plan for their specific app URL and notes.
+
+REQUIRED OUTPUT FORMAT (use these exact section headers):
+
+## The bottom line
+One sentence verdict: NOT READY / READY WITH WARNINGS / READY TO ANNOUNCE. Then 2-3 sentences a 12-year-old could understand — what works, what doesn't, and why strangers can't use it yet.
+
+## What you can say in Discord right now
+One honest sentence they can copy-paste today. If NOT READY, give a "still working on it" line — NOT a "it's complete" line.
+
+## Your fix plan — do these in order
+Walk through EVERY fix plan step the scan returned. For each step:
+- **Step X of Y: [title]** (use the fix plan steps provided)
+- **What to do:** exact clicks, sites, and file names. Say "your website folder" not "frontend repo". Say "your server folder" not "backend". Say "the cloud computer (Railway)" not "deploy the Node service".
+- **How you'll know it worked:** one concrete success signal
+- **Stuck?** one common mistake for that step
+
+If localhost was found: emphasize they need TWO things online — (1) website on Vercel/GitHub Pages, (2) server on Railway — and the website must call the Railway HTTPS address, NOT localhost.
+
+If LCAI payments were detected AND localhost/issues found: WARN clearly — users could pay real LCAI and get nothing. Tell them to fix the server BEFORE announcing.
+
+## After you fix it
+Tell them to come back to OrcaAppBuilder → Launch Check → paste the same URL → Run again. Pass = ready to announce.
+
+RULES:
+- No jargon without a plain-English translation in parentheses
+- No "just SSH in" or "edit your Dockerfile" — assume they use GitHub Desktop and VS Code
+- Never say "ship it" or "looks great" if localhost or undeployed server was found
+- Be warm and encouraging — this is fixable and very common for first-time builders
 
 When mode is LEARN or CHAT: Answer questions about building on Lightchain. Be a knowledgeable friend, not a textbook. Give real examples from real apps.
 
@@ -1570,28 +1591,127 @@ def _start_job(message: str, mode: str, session_id: str = None) -> str:
 _LAUNCH_PATTERNS = [
     ('critical', 'localhost API URL',
      _re.compile(r'https?://localhost[:\d]*|localhost:\d+', _re.I),
-     'Frontend calls localhost — only works on the builder\'s PC, not for visitors.'),
+     'Your website is trying to talk to your own computer — strangers cannot reach it.',
+     'localhost_backend'),
     ('critical', '127.0.0.1 API URL',
      _re.compile(r'https?://127\.0\.0\.1[:\d]*', _re.I),
-     'Frontend calls 127.0.0.1 — same problem as localhost.'),
+     'Same problem as localhost — only works on your PC.',
+     'localhost_backend'),
     ('critical', 'Placeholder backend URL',
      _re.compile(r'your-railway-url|YOUR_RAILWAY|REPLACE_ME|example\.com/api', _re.I),
-     'Backend URL is still a placeholder — replace with your real Railway HTTPS URL.'),
+     'The server address in your code is still a placeholder — not a real internet address.',
+     'update_server_address'),
     ('warning', 'HTTP API from HTTPS site',
      _re.compile(r'fetch\s*\(\s*["\']http://(?!localhost)', _re.I),
-     'Non-HTTPS API call — may be blocked by browsers on HTTPS-hosted frontends.'),
+     'Your secure website may be blocked from calling an insecure http address.',
+     'use_https_url'),
     ('warning', 'Generic React app title',
      _re.compile(r'<title>React App</title>|Create React App Sample', _re.I),
-     'Page still has default Create React App title — looks unfinished to visitors.'),
+     'Browser tab still says "React App" — looks unfinished to visitors.',
+     'fix_app_title'),
     ('warning', 'Hardcoded API port',
      _re.compile(r'fetch\s*\([^)]*:(3000|3001|5000|8000|8080|8187)', _re.I),
-     'API may be pointing at a local dev port — confirm backend is deployed publicly.'),
+     'Your code points at a developer-only port — probably not on the internet yet.',
+     'localhost_backend'),
     ('info', 'LCAI payment detected',
      _re.compile(r'parseEther|sendTransaction|LCAI', _re.I),
-     'Payment flow present — verify users cannot pay if backend/AI calls still fail.'),
+     'Users can pay real LCAI — make sure they get what they paid for before you announce.',
+     'payment_safety'),
     ('info', 'Wallet connect present',
      _re.compile(r'eth_requestAccounts|window\.ethereum', _re.I),
-     'Wallet connection code found.'),
+     'Wallet connection looks wired up — good.',
+     None),
+]
+
+# Beginner-friendly fix playbooks returned with every scan (non-nerd language)
+_LAUNCH_FIX_PLAYBOOKS = {
+    'localhost_backend': {
+        'id': 'localhost_backend',
+        'emoji': '🧠',
+        'title': 'Put your app\'s "brain" on the internet',
+        'why': 'Your website is online (Vercel/GitHub Pages) but the AI/music/data part still lives on YOUR computer. When a friend opens your link, their phone looks for a server on THEIR computer — and finds nothing.',
+        'steps': [
+            {'num': 1, 'title': 'Find your server folder on your PC',
+             'do': 'This is the folder you run with npm start or python server.py — NOT the folder you uploaded to Vercel. It often has files like server.js, server.py, or an api/ folder.',
+             'check': 'You can point to the folder that must be running locally for your app to work today.'},
+            {'num': 2, 'title': 'Put that server folder on GitHub',
+             'do': 'Open GitHub Desktop → File → Add Local Repository → pick your SERVER folder → Publish repository. Name it something like myapp-server.',
+             'check': 'You see the folder on github.com when you log in.'},
+            {'num': 3, 'title': 'Connect Railway to that repo',
+             'do': 'Go to railway.app → sign up → New Project → Deploy from GitHub → pick your SERVER repo. Wait ~2 minutes for the green "Deployed" status.',
+             'check': 'Railway shows your project running. Click it → Settings → Networking → copy the public URL (starts with https:// and ends in .up.railway.app).'},
+            {'num': 4, 'title': 'Copy your Railway address',
+             'do': 'Save that https://....up.railway.app URL in a notepad. This is your server\'s new home on the internet. Test it: paste it in your browser and add /api/health or / if you have one — you should NOT see "connection refused".',
+             'check': 'The Railway URL loads something (even an error page from YOUR server is OK — it proves the server is online).'},
+            {'num': 5, 'title': 'Replace localhost in your WEBSITE code',
+             'do': 'Open your WEBSITE project in VS Code (the one on Vercel). Press Ctrl+Shift+F (Cmd+Shift+F on Mac) → search for localhost → replace every http://localhost:3001 (or similar) with your Railway https:// URL. Save all files.',
+             'check': 'Searching your website code for "localhost" finds zero results.'},
+            {'num': 6, 'title': 'Put your updated website back online',
+             'do': 'If Vercel: push to GitHub (GitHub Desktop → Commit → Push) and Vercel auto-updates in ~1 min. If GitHub Pages: same push workflow. Or click Redeploy in the Vercel dashboard.',
+             'check': 'Your live URL shows a new deploy timestamp or you pushed in the last few minutes.'},
+            {'num': 7, 'title': 'Test the RIGHT way (important!)',
+             'do': 'Do NOT test on the same PC where your local server runs. Use your phone on cellular data (turn WiFi OFF) or ask a friend in Discord to click your link. Try the full flow: lyrics/AI → pay → download.',
+             'check': 'Someone who is NOT you can complete the full flow without errors.'},
+            {'num': 8, 'title': 'Run Launch Check again',
+             'do': 'Come back here → paste the same live URL → Run Launch Check. Critical issues should be gone.',
+             'check': 'Launch Check says READY or READY WITH WARNINGS (not NOT READY).'},
+        ],
+    },
+    'update_server_address': {
+        'id': 'update_server_address',
+        'emoji': '🔗',
+        'title': 'Swap the placeholder server address for your real one',
+        'why': 'Your code still says "your-railway-url" or similar — that is not a real address. You need the https://....up.railway.app link from Railway.',
+        'steps': [
+            {'num': 1, 'title': 'Get your real Railway URL', 'do': 'railway.app → your project → Settings → Networking → copy the https URL.', 'check': 'You have a URL ending in .up.railway.app copied.'},
+            {'num': 2, 'title': 'Find and replace the placeholder', 'do': 'VS Code → open website folder → Ctrl+Shift+F → search your-railway-url or REPLACE_ME → paste your real Railway URL → Save.', 'check': 'No placeholders left in your code.'},
+            {'num': 3, 'title': 'Redeploy your website', 'do': 'GitHub Desktop → Commit → Push (or Vercel Redeploy).', 'check': 'Live site updated.'},
+        ],
+    },
+    'fix_app_title': {
+        'id': 'fix_app_title',
+        'emoji': '🏷️',
+        'title': 'Give your app a real name in the browser tab',
+        'why': 'Visitors still see "React App" in the tab — looks like a demo, not a finished product.',
+        'steps': [
+            {'num': 1, 'title': 'Change the title', 'do': 'In your website folder, open public/index.html (React) or index.html → change <title>React App</title> to your app name like <title>LyricsAI</title>.', 'check': 'Browser tab shows your app name after redeploy.'},
+            {'num': 2, 'title': 'Redeploy', 'do': 'Push to GitHub or redeploy on Vercel.', 'check': 'Live site tab shows the new name.'},
+        ],
+    },
+    'payment_safety': {
+        'id': 'payment_safety',
+        'emoji': '💸',
+        'title': 'Protect paying users',
+        'why': 'Your app charges LCAI. If the server/AI part is broken, users could pay and get nothing — that creates angry Discord messages.',
+        'steps': [
+            {'num': 1, 'title': 'Fix the server first', 'do': 'Complete the "brain on the internet" steps above BEFORE telling anyone to pay.', 'check': 'AI/music/features work from a friend\'s phone without your PC running.'},
+            {'num': 2, 'title': 'Test a real payment on testnet or small amount', 'do': 'Do one full pay → receive flow yourself from a phone, not your dev PC.', 'check': 'Payment completes AND the user gets the song/feature/download.'},
+        ],
+    },
+    'test_properly': {
+        'id': 'test_properly',
+        'emoji': '📱',
+        'title': 'Test like a real user',
+        'why': 'Testing on your own PC while your local server runs gives a false "it works!" result.',
+        'steps': [
+            {'num': 1, 'title': 'Phone on cellular', 'do': 'Turn OFF WiFi on your phone → open your live URL → try the full app.', 'check': 'Works without your PC turned on or server running locally.'},
+            {'num': 2, 'title': 'Or ask a friend', 'do': 'Send the link in Discord DM — ask "does the AI/music work for you?"', 'check': 'They confirm yes before you announce publicly.'},
+        ],
+    },
+    'use_https_url': {
+        'id': 'use_https_url',
+        'emoji': '🔒',
+        'title': 'Use https:// for your server address',
+        'why': 'Secure websites (Vercel/GitHub) often block calls to plain http:// addresses.',
+        'steps': [
+            {'num': 1, 'title': 'Check your server URL starts with https://', 'do': 'Railway gives you https automatically — make sure your code uses that full URL, not http://.', 'check': 'Every fetch() in your code uses https://.'},
+        ],
+    },
+}
+
+_FIX_PLAN_ORDER = [
+    'localhost_backend', 'update_server_address', 'use_https_url',
+    'payment_safety', 'fix_app_title', 'test_properly',
 ]
 
 _BLOCKED_FETCH_HOSTS = (
@@ -1640,7 +1760,7 @@ def scan_text_for_launch_issues(text: str, source: str) -> list:
         return []
     findings = []
     seen = set()
-    for severity, title, pattern, detail in _LAUNCH_PATTERNS:
+    for severity, title, pattern, detail, fix_id in _LAUNCH_PATTERNS:
         for m in pattern.finditer(text):
             snippet = text[max(0, m.start() - 30):m.end() + 40].replace('\n', ' ').strip()
             key = (severity, title, snippet[:80])
@@ -1653,8 +1773,49 @@ def scan_text_for_launch_issues(text: str, source: str) -> list:
                 'detail': detail,
                 'source': source,
                 'snippet': snippet[:160],
+                'fix_id': fix_id,
             })
     return findings
+
+
+def _build_fix_plan(findings: list, url: str = '') -> list:
+    """Ordered beginner fix playbooks based on what the scan found."""
+    needed = set()
+    for f in findings:
+        fid = f.get('fix_id')
+        if fid:
+            needed.add(fid)
+    if any(f.get('fix_id') == 'localhost_backend' for f in findings):
+        needed.add('test_properly')
+    plan = []
+    for fid in _FIX_PLAN_ORDER:
+        if fid in needed and fid in _LAUNCH_FIX_PLAYBOOKS:
+            plan.append(_LAUNCH_FIX_PLAYBOOKS[fid])
+    return plan
+
+
+def _plain_summary(findings: list, url: str, verdict_hint: str) -> str:
+    """One-paragraph explanation for non-technical builders."""
+    has_localhost = any(
+        f.get('fix_id') == 'localhost_backend' for f in findings if f.get('severity') == 'critical'
+    )
+    has_payment = any(f.get('fix_id') == 'payment_safety' for f in findings)
+    if has_localhost:
+        base = (
+            'Your website link works — people can open the page — but the features (AI, music, data) '
+            'still try to connect to your own computer, not the internet. '
+            'Only you can use it while your PC is running the server.'
+        )
+        if has_payment:
+            base += ' Worse: users could pay LCAI and still get nothing. Fix the server before announcing.'
+        if url:
+            base += f' Follow the step-by-step fix plan below for {url}.'
+        return base
+    if verdict_hint == 'NOT READY':
+        return 'We found problems that will break the app for other people. Follow the fix plan below before posting in Discord.'
+    if verdict_hint == 'READY WITH WARNINGS':
+        return 'Your app may work for others, but polish the warnings below before a big announcement.'
+    return 'No major blockers found in the automatic scan — still test from a friend\'s phone, then run Launch Check again.'
 
 
 def scan_live_url(url: str) -> dict:
@@ -1747,15 +1908,19 @@ def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
         })
 
     verdict_hint = 'NOT READY' if critical else ('READY WITH WARNINGS' if warnings else 'LIKELY OK — VERIFY MANUALLY')
+    fix_plan = _build_fix_plan(findings, url)
 
     return {
         'ok': True,
         'verdict_hint': verdict_hint,
+        'plain_summary': _plain_summary(findings, url, verdict_hint),
         'critical_count': len(critical),
         'warning_count': len(warnings),
         'findings': findings,
+        'fix_plan': fix_plan,
         'sources_scanned': sources_scanned,
         'notes': notes,
+        'url': url,
     }
 
 
