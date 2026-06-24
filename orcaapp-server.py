@@ -3,7 +3,7 @@
 OrcaApp — dApp Builder Companion for Lightchain AI
 Port 8187 | AI wizards via Lightchain AIVM
 
-Handles all 4 modes: learn, brainstorm, build, troubleshoot.
+Handles all 5 modes: learn, brainstorm, build, troubleshoot, launchcheck.
 Mode context is passed with each request so one backend serves all.
 Every AI call costs ~0.02 LCAI (dApp wallet), node earns back ~0.016.
 Set LIGHTCHAIN_PRIVATE_KEY env var before running.
@@ -20,7 +20,7 @@ if os.path.exists('/home/keiko/pylibs'):
 
 import socketserver
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json, threading, time, secrets, base64, struct, queue
+import json, threading, time, secrets, base64, struct
 from urllib.parse import urlparse, parse_qs
 
 PORT = int(os.environ.get('PORT', 8187))
@@ -208,6 +208,8 @@ IMPORTANT: Your dApp needs to actually USE the blockchain (LCAI payments, AIVM, 
 6. Using tags not in the approved list (like SECURITY, STORAGE, NODE) → use INFRA or WORKERS instead
 7. Putting your private key in your code → always use environment variables
 8. Forgetting to add terms/disclaimer to your app → you need one for liability
+9. Deploying only the frontend while API calls still point at localhost → works on YOUR PC only, broken for everyone else
+10. Announcing "my app is complete" when only the website URL is live → frontend deployed ≠ backend deployed ≠ app works for visitors
 
 == WHAT A REAL LIGHTCHAIN dApp LOOKS LIKE ==
 Real examples built by the Orca Pod community:
@@ -228,6 +230,17 @@ When mode is BRAINSTORM: Help the user develop a dApp idea. Ask what they're int
 When mode is BUILD: Help the user build their specific app. If they describe their idea, create a complete project plan: app name, description, smart contract needed (yes/no), tech stack (what tools), suggested AIVM use case, hosting recommendation, estimated steps. Then guide them through it step by step. Generate actual code snippets when asked. Be very specific.
 
 When mode is TROUBLESHOOT: Diagnose their problem. Ask clarifying questions if needed. Give step-by-step fixes. Always tell them what the problem likely is in plain English before giving the fix. Suggest running health checks. Reference specific error messages if they share them.
+
+When mode is LAUNCHCHECK: You are the final pre-launch reviewer. The user may think their app is "complete" because the frontend URL loads. You will receive AUTOMATED SCAN RESULTS — treat those as ground truth. Your job:
+1. Start with a clear verdict: NOT READY / READY WITH WARNINGS / READY TO ANNOUNCE
+2. Explain in plain English what "frontend live" vs "backend live" vs "works for strangers" means
+3. List CRITICAL blockers first (localhost APIs, missing backend deploy, users can pay but get nothing)
+4. List warnings second (generic page title, missing network switch, no terms/disclaimer)
+5. List what looks correct (wallet connect, payment wiring, UI deployed, etc.)
+6. Give numbered fix steps a beginner can follow — include deploy backend to Railway and replace localhost with HTTPS URL
+7. End with an "Honest Discord post" line — one sentence they can truthfully post right now
+
+Be kind but direct. Never say "looks great, ship it" if automated scan found localhost or undeployed backend. Real example: a Vercel React app calling http://localhost:3001/api/lyrics works only when the builder has the Node server running on the same PC — visitors' browsers try THEIR localhost, not the builder's machine.
 
 When mode is LEARN or CHAT: Answer questions about building on Lightchain. Be a knowledgeable friend, not a textbook. Give real examples from real apps.
 
@@ -503,14 +516,21 @@ BUG #8 — Subgraph queries silently return empty with lowercase addresses
   Fix: Always use Web3.to_checksum_address(address) before passing to subgraph queries.
     In ethers.js: ethers.getAddress(address) gives the checksum version.
 
-BUG #9 — GitHub Pages HTTPS blocks calls to localhost HTTP
-  Symptom: AI works when running locally (http://localhost:8187) but fails when app is on GitHub Pages
-  Why it breaks: GitHub Pages is served over HTTPS. Browsers block "mixed content" —
-    an HTTPS page calling an HTTP endpoint (like http://localhost:PORT). This is a browser
-    security rule and cannot be bypassed.
-  Fix: For production, always point to your Railway HTTPS URL (https://your-app.up.railway.app).
-    For local testing: run a local tunnel (ngrok, cloudflared) to get an HTTPS URL for localhost,
-    OR test the app from a plain http:// page rather than GitHub Pages.
+BUG #9 — localhost / undeployed backend (GitHub Pages, Vercel, Netlify — ALL hosting)
+  Symptom: App "works for me" on my PC but fails for friends, Discord testers, or phone on cellular
+  Why it breaks — TWO separate problems:
+    (A) localhost means "this computer right now." When a visitor opens your Vercel/GitHub Pages site,
+        fetch("http://localhost:3001/api/...") calls THEIR laptop's port 3001 — not your machine, not the cloud.
+        It only works for you if YOU have the backend running locally on the same PC as your browser.
+    (B) HTTPS hosted pages cannot call http://localhost (mixed content) — browser blocks it entirely.
+  Common mistake: Builder deploys React frontend to Vercel, posts "it's complete", but Node/Python backend
+    was never deployed to Railway/Render. Frontend is half the app.
+  Fix:
+    1. Deploy backend to Railway (or Render) — get https://your-app.up.railway.app
+    2. Replace every localhost URL in frontend with that HTTPS URL (use env vars: REACT_APP_API_URL)
+    3. Test from a friend's phone or incognito — NOT from the same PC where the local server runs
+    4. Only announce publicly after step 3 passes
+  OrcaAppBuilder Launch Check scans for this automatically before you post in Discord.
 
 BUG #10 — "Resolved" job is not lost
   Symptom: User panics because on-chain job shows "Resolved" status instead of "Completed"
@@ -844,12 +864,12 @@ AIVM_ABI = [
     {
         "name": "createSession", "type": "function", "stateMutability": "payable",
         "inputs": [
-            {"name": "modelId",               "type": "bytes32"},
-            {"name": "worker",                "type": "address"},
-            {"name": "encWorkerKey",          "type": "bytes"},
-            {"name": "encDisputerKey",        "type": "bytes"},
-            {"name": "dispatcherSignature",   "type": "bytes"},
-            {"name": "expiry",                "type": "uint256"},
+            {"name": "paramsHash",      "type": "bytes32"},
+            {"name": "worker",          "type": "address"},
+            {"name": "encWorkerKey",    "type": "bytes"},
+            {"name": "ephemeralPubKey", "type": "bytes"},
+            {"name": "initState",       "type": "bytes"},
+            {"name": "expiry",          "type": "uint256"},
         ],
         "outputs": [{"name": "sessionId", "type": "uint256"}],
     },
@@ -1246,9 +1266,10 @@ def run_aivm_inference(user_message: str, mode: str = 'chat', history: list = No
     """
     try:
         mode_context = {
-            'brainstorm': '\n[MODE: BRAINSTORM — help generate dApp ideas]',
-            'build':      '\n[MODE: BUILD — help plan and build a specific dApp]',
+            'brainstorm':   '\n[MODE: BRAINSTORM — help generate dApp ideas]',
+            'build':        '\n[MODE: BUILD — help plan and build a specific dApp]',
             'troubleshoot': '\n[MODE: TROUBLESHOOT — diagnose and fix a problem]',
+            'launchcheck':  '\n[MODE: LAUNCHCHECK — final pre-launch review using automated scan results]',
         }.get(mode, '')
 
         # Build conversation history block if prior turns exist
@@ -1468,8 +1489,8 @@ def _DEAD_CODE_old_run_aivm():
 
     except Exception as e:
         print(f'[AIVM ERROR] {e}')
-        return (f'The AI is temporarily unavailable (network or AIVM issue). '
-                f'Please try again in a moment. Error: {str(e)[:120]}')
+        return ('The AI is temporarily unavailable (network or AIVM issue). '
+                'Please try again in a moment.')
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1484,7 +1505,6 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 # In-memory job store: job_id -> {status, reply, error, created}
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
-_aivm_work_queue: queue.Queue = queue.Queue()
 
 # Conversation history store: session_id -> [{"role": "user"|"assistant", "content": "..."}]
 # Keeps the last 6 exchanges (12 messages) per session to give the AI context.
@@ -1492,23 +1512,44 @@ _sessions: dict = {}
 _sessions_lock = threading.Lock()
 
 
-def _aivm_worker_loop():
-    """One AIVM payment at a time — testers queue instead of colliding on-chain."""
-    while True:
-        job_id, message, mode, history, session_id = _aivm_work_queue.get()
+def _start_job(message: str, mode: str, session_id: str = None) -> str:
+    """Launch AIVM inference in background; return job_id immediately.
+
+    session_id: if provided, loads prior conversation turns as context and
+                appends the new exchange to the session history on completion.
+    """
+    job_id = secrets.token_hex(10)
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'pending', 'reply': None, 'error': None,
+                         'created': time.time()}
+    # Remove stale jobs (older than 15 minutes)
+    cutoff = time.time() - 900
+    with _jobs_lock:
+        stale = [k for k, v in _jobs.items() if v['created'] < cutoff]
+        for k in stale:
+            del _jobs[k]
+
+    # Snapshot history for this session (copy so background thread has stable data)
+    history = []
+    if session_id:
+        with _sessions_lock:
+            history = list(_sessions.get(session_id, []))
+
+    def _worker():
         try:
-            print(f'[JOB {job_id}] dequeued (waiting={_aivm_work_queue.qsize()})')
             reply = run_aivm_inference(message, mode, history)
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]['status'] = 'done'
-                    _jobs[job_id]['reply'] = reply
+                    _jobs[job_id]['reply']  = reply
+            # Store this exchange in session history
             if session_id and reply:
                 with _sessions_lock:
                     if session_id not in _sessions:
                         _sessions[session_id] = []
-                    _sessions[session_id].append({'role': 'user', 'content': message})
+                    _sessions[session_id].append({'role': 'user',      'content': message})
                     _sessions[session_id].append({'role': 'assistant', 'content': reply})
+                    # Cap at last 12 messages (6 back-and-forth exchanges)
                     if len(_sessions[session_id]) > 12:
                         _sessions[session_id] = _sessions[session_id][-12:]
         except Exception as e:
@@ -1516,38 +1557,206 @@ def _aivm_worker_loop():
             with _jobs_lock:
                 if job_id in _jobs:
                     _jobs[job_id]['status'] = 'error'
-                    _jobs[job_id]['error'] = str(e)[:300]
-        finally:
-            _aivm_work_queue.task_done()
+                    _jobs[job_id]['error']  = str(e)[:300]
 
-
-threading.Thread(target=_aivm_worker_loop, daemon=True).start()
-
-
-def _start_job(message: str, mode: str, session_id: str = None) -> str:
-    """Queue AIVM inference; return job_id immediately."""
-    job_id = secrets.token_hex(10)
-    with _jobs_lock:
-        _jobs[job_id] = {
-            'status': 'pending',
-            'reply': None,
-            'error': None,
-            'created': time.time(),
-            'queue': _aivm_work_queue.qsize() + 1,
-        }
-        cutoff = time.time() - 900
-        stale = [k for k, v in _jobs.items() if v['created'] < cutoff]
-        for k in stale:
-            del _jobs[k]
-
-    history = []
-    if session_id:
-        with _sessions_lock:
-            history = list(_sessions.get(session_id, []))
-
-    _aivm_work_queue.put((job_id, message, mode, history, session_id))
-    print(f'[JOB {job_id}] queued (depth={_aivm_work_queue.qsize()})')
+    threading.Thread(target=_worker, daemon=True).start()
     return job_id
+
+
+# ════════════════════════════════════════════════════════════════════════
+# LAUNCH CHECK — automated pre-launch scanner
+# ════════════════════════════════════════════════════════════════════════
+
+_LAUNCH_PATTERNS = [
+    ('critical', 'localhost API URL',
+     _re.compile(r'https?://localhost[:\d]*|localhost:\d+', _re.I),
+     'Frontend calls localhost — only works on the builder\'s PC, not for visitors.'),
+    ('critical', '127.0.0.1 API URL',
+     _re.compile(r'https?://127\.0\.0\.1[:\d]*', _re.I),
+     'Frontend calls 127.0.0.1 — same problem as localhost.'),
+    ('critical', 'Placeholder backend URL',
+     _re.compile(r'your-railway-url|YOUR_RAILWAY|REPLACE_ME|example\.com/api', _re.I),
+     'Backend URL is still a placeholder — replace with your real Railway HTTPS URL.'),
+    ('warning', 'HTTP API from HTTPS site',
+     _re.compile(r'fetch\s*\(\s*["\']http://(?!localhost)', _re.I),
+     'Non-HTTPS API call — may be blocked by browsers on HTTPS-hosted frontends.'),
+    ('warning', 'Generic React app title',
+     _re.compile(r'<title>React App</title>|Create React App Sample', _re.I),
+     'Page still has default Create React App title — looks unfinished to visitors.'),
+    ('warning', 'Hardcoded API port',
+     _re.compile(r'fetch\s*\([^)]*:(3000|3001|5000|8000|8080|8187)', _re.I),
+     'API may be pointing at a local dev port — confirm backend is deployed publicly.'),
+    ('info', 'LCAI payment detected',
+     _re.compile(r'parseEther|sendTransaction|LCAI', _re.I),
+     'Payment flow present — verify users cannot pay if backend/AI calls still fail.'),
+    ('info', 'Wallet connect present',
+     _re.compile(r'eth_requestAccounts|window\.ethereum', _re.I),
+     'Wallet connection code found.'),
+]
+
+_BLOCKED_FETCH_HOSTS = (
+    'localhost', '127.0.0.1', '0.0.0.0', '[::1]',
+)
+
+
+def _is_safe_public_url(url: str) -> bool:
+    """Reject SSRF targets — only allow public http(s) URLs."""
+    try:
+        p = urlparse(url.strip())
+    except Exception:
+        return False
+    if p.scheme not in ('http', 'https'):
+        return False
+    host = (p.hostname or '').lower()
+    if not host or host in _BLOCKED_FETCH_HOSTS:
+        return False
+    if host.endswith('.local') or host.endswith('.internal'):
+        return False
+    # Block private IP ranges
+    if _re.match(r'^10\.', host):
+        return False
+    if _re.match(r'^192\.168\.', host):
+        return False
+    if _re.match(r'^172\.(1[6-9]|2\d|3[01])\.', host):
+        return False
+    return True
+
+
+def _http_get_text(url: str, max_bytes: int = 2_500_000, timeout: int = 20) -> str:
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        headers={'User-Agent': 'OrcaAppBuilder-LaunchCheck/1.0'},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        data = data[:max_bytes]
+    return data.decode('utf-8', errors='replace')
+
+
+def scan_text_for_launch_issues(text: str, source: str) -> list:
+    if not text:
+        return []
+    findings = []
+    seen = set()
+    for severity, title, pattern, detail in _LAUNCH_PATTERNS:
+        for m in pattern.finditer(text):
+            snippet = text[max(0, m.start() - 30):m.end() + 40].replace('\n', ' ').strip()
+            key = (severity, title, snippet[:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            findings.append({
+                'severity': severity,
+                'title': title,
+                'detail': detail,
+                'source': source,
+                'snippet': snippet[:160],
+            })
+    return findings
+
+
+def scan_live_url(url: str) -> dict:
+    """Fetch a public URL and scan HTML + linked JS bundles."""
+    if not _is_safe_public_url(url):
+        return {'ok': False, 'error': 'Invalid or non-public URL', 'findings': [], 'sources': []}
+
+    sources = []
+    all_findings = []
+    try:
+        html = _http_get_text(url)
+        sources.append({'type': 'html', 'url': url, 'bytes': len(html)})
+        all_findings.extend(scan_text_for_launch_issues(html, f'Live site HTML ({url})'))
+
+        # Collect script src URLs from HTML
+        script_srcs = _re.findall(
+            r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', html, _re.I)
+        base = url.rstrip('/')
+        js_urls = []
+        for src in script_srcs:
+            if src.startswith('http'):
+                js_urls.append(src)
+            elif src.startswith('/'):
+                p = urlparse(url)
+                js_urls.append(f'{p.scheme}://{p.netloc}{src}')
+            else:
+                js_urls.append(f'{base}/{src}')
+
+        # Prefer main.*.js bundles (Create React App / Vite)
+        js_urls.sort(key=lambda u: (0 if 'main.' in u else 1, u))
+        for js_url in js_urls[:4]:
+            try:
+                js = _http_get_text(js_url, max_bytes=4_000_000)
+                sources.append({'type': 'javascript', 'url': js_url, 'bytes': len(js)})
+                all_findings.extend(scan_text_for_launch_issues(js, f'JS bundle ({js_url})'))
+            except Exception as e:
+                sources.append({'type': 'javascript', 'url': js_url, 'error': str(e)[:120]})
+
+        return {
+            'ok': True,
+            'url': url,
+            'findings': all_findings,
+            'sources': sources,
+            'critical_count': sum(1 for f in all_findings if f['severity'] == 'critical'),
+            'warning_count': sum(1 for f in all_findings if f['severity'] == 'warning'),
+        }
+    except Exception as e:
+        return {'ok': False, 'error': str(e)[:300], 'findings': all_findings, 'sources': sources}
+
+
+def run_launch_scan(url: str = '', code: str = '', notes: str = '') -> dict:
+    """Combine URL fetch scan + pasted code scan."""
+    findings = []
+    sources_scanned = []
+
+    url = (url or '').strip()
+    code = (code or '').strip()
+    notes = (notes or '').strip()
+
+    if url:
+        url_result = scan_live_url(url)
+        findings.extend(url_result.get('findings') or [])
+        sources_scanned.extend(url_result.get('sources') or [])
+        if not url_result.get('ok'):
+            findings.append({
+                'severity': 'warning',
+                'title': 'Could not fully scan live URL',
+                'detail': url_result.get('error', 'Fetch failed — paste your code below instead.'),
+                'source': 'URL fetch',
+                'snippet': url,
+            })
+    if code:
+        sources_scanned.append({'type': 'pasted_code', 'bytes': len(code)})
+        findings.extend(scan_text_for_launch_issues(code, 'Pasted code'))
+
+    if not url and not code:
+        return {'ok': False, 'error': 'Enter your live URL and/or paste code to scan.'}
+
+    critical = [f for f in findings if f['severity'] == 'critical']
+    warnings = [f for f in findings if f['severity'] == 'warning']
+    infos    = [f for f in findings if f['severity'] == 'info']
+
+    if not critical and not warnings and (url or code):
+        findings.append({
+            'severity': 'ok',
+            'title': 'No automatic blockers detected',
+            'detail': 'Static scan did not find localhost or placeholder URLs. Still run the AI review and test from another device.',
+            'source': 'Scanner',
+            'snippet': '',
+        })
+
+    verdict_hint = 'NOT READY' if critical else ('READY WITH WARNINGS' if warnings else 'LIKELY OK — VERIFY MANUALLY')
+
+    return {
+        'ok': True,
+        'verdict_hint': verdict_hint,
+        'critical_count': len(critical),
+        'warning_count': len(warnings),
+        'findings': findings,
+        'sources_scanned': sources_scanned,
+        'notes': notes,
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -1614,6 +1823,15 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
             data = json.loads(body)
         except Exception:
             self.send_json(400, {'error': 'invalid JSON'})
+            return
+
+        if path == '/api/launchcheck/scan':
+            url   = (data.get('url') or '').strip()
+            code  = (data.get('code') or '').strip()
+            notes = (data.get('notes') or '').strip()
+            result = run_launch_scan(url=url, code=code, notes=notes)
+            status = 200 if result.get('ok') else 400
+            self.send_json(status, result)
             return
 
         if path == '/api/chat':
