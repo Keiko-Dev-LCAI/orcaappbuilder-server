@@ -2006,12 +2006,29 @@ class OrcaAppHandler(BaseHTTPRequestHandler):
         path   = parsed.path
 
         if path == '/api/health':
+            # Check dApp wallet balance live
+            aivm_status = 'no key'
+            dapp_balance = None
+            if PRIVATE_KEY:
+                try:
+                    acct = w3.eth.account.from_key(PRIVATE_KEY)
+                    bal_wei = w3.eth.get_balance(acct.address)
+                    dapp_balance = round(bal_wei / 1e18, 4)
+                    if dapp_balance >= 50:
+                        aivm_status = 'ready'
+                    elif dapp_balance > 0:
+                        aivm_status = 'low_balance'
+                    else:
+                        aivm_status = 'empty'
+                except Exception:
+                    aivm_status = 'ready'  # fallback if RPC unavailable
             self.send_json(200, {
-                'status':  'ok',
-                'service': 'orcaapp',
-                'version': '1.0.0',
-                'aivm':    'ready' if PRIVATE_KEY else 'no key',
-                'jobs':    len(_jobs),
+                'status':       'ok',
+                'service':      'orcaapp',
+                'version':      '1.0.0',
+                'aivm':         aivm_status,
+                'dapp_balance': dapp_balance,
+                'jobs':         len(_jobs),
             })
 
         elif path == '/api/chat/status':
